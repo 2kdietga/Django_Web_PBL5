@@ -1,150 +1,240 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
   <head>
     <meta charset="UTF-8" />
-    <title>Live Camera - Device {{ device.id }}</title>
+    <title>Live Device {{ device.id }}</title>
+
     <style>
       body {
         font-family: Arial, sans-serif;
-        background: #111;
-        color: white;
-        text-align: center;
-        margin: 0;
-        padding: 20px;
+        padding: 24px;
+        background: #f5f5f5;
       }
 
-      h1 {
-        margin-bottom: 10px;
+      .container {
+        max-width: 1000px;
+        margin: auto;
       }
 
-      .meta {
-        margin-bottom: 20px;
-        color: #bbb;
-      }
-
-      img {
-        width: 90%;
-        max-width: 900px;
-        border: 3px solid #444;
+      .card {
+        background: white;
         border-radius: 12px;
-        background: #222;
+        padding: 16px;
+        margin-bottom: 16px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
       }
 
-      #statusBox {
-        margin-top: 20px;
-        font-size: 20px;
+      #liveFrame {
+        width: 100%;
+        max-width: 760px;
+        border-radius: 12px;
+        background: #111;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .item {
+        padding: 12px;
+        background: #f0f0f0;
+        border-radius: 8px;
+      }
+
+      .safe {
+        color: green;
         font-weight: bold;
-        line-height: 1.8;
       }
 
-      .label {
-        color: #bbb;
-        margin-right: 8px;
+      .warning {
+        color: orange;
+        font-weight: bold;
+      }
+
+      .danger {
+        color: red;
+        font-weight: bold;
       }
     </style>
   </head>
-
   <body>
-    <h1>Live Camera - Device {{ device.id }}</h1>
-
-    <div class="meta">
-      Device: {{ device.name }} | Last frame: {{
-      device.latest_frame_at|default:"Chưa có ảnh" }}
-    </div>
-
-    <img id="camera" src="/devices/{{ device.id }}/frame/" alt="Live camera" />
-
-    <div id="statusBox">
-      <div><span class="label">Eye:</span><span id="eyeStatus">...</span></div>
-      <div>
-        <span class="label">Eye streak:</span><span id="eyeStreak">0</span>
+    <div class="container">
+      <div class="card">
+        <h2>Live View - Device #{{ device.id }}</h2>
+        <p>Token: {{ device.token }}</p>
       </div>
 
-      <div>
-        <span class="label">Head:</span><span id="headStatus">...</span>
+      <div class="card">
+        <h3>Latest Frame</h3>
+        <img
+          id="liveFrame"
+          src="/devices/{{ device.id }}/frame/"
+          alt="Latest frame"
+        />
+        <p>Latest frame at: <span id="latestFrameAt">-</span></p>
+        <p>Latest AI at: <span id="latestAiAt">-</span></p>
       </div>
-      <div>
-        <span class="label">Head dir:</span
-        ><span id="headDirection">FORWARD</span>
+
+      <div class="card">
+        <h3>AI Status</h3>
+
+        <div class="grid">
+          <div class="item">
+            <strong>Eye Status</strong>
+            <div id="eyeStatus">UNKNOWN</div>
+          </div>
+
+          <div class="item">
+            <strong>Calibrated</strong>
+            <div id="isCalibrated">false</div>
+          </div>
+
+          <div class="item">
+            <strong>Eye Closed Streak</strong>
+            <div>
+              <span id="eyeClosedStreak">0</span>
+              / {{ DROWSINESS_EYE_CLOSED_FRAMES }}
+            </div>
+          </div>
+
+          <div class="item">
+            <strong>EAR</strong>
+            <div id="ear">-</div>
+          </div>
+
+          <div class="item">
+            <strong>Baseline EAR</strong>
+            <div id="baselineEar">-</div>
+          </div>
+
+          <div class="item">
+            <strong>Head Direction</strong>
+            <div id="headDirection">FORWARD</div>
+          </div>
+
+          <div class="item">
+            <strong>Head Yaw</strong>
+            <div id="headYaw">0</div>
+          </div>
+
+          <div class="item">
+            <strong>Head Turn Score</strong>
+            <div>
+              <span id="headTurnScore">0</span>
+              / {{ DROWSINESS_HEAD_TURN_VIOLATION_FRAMES }}
+            </div>
+          </div>
+
+          <div class="item">
+            <strong>Head Status</strong>
+            <div id="headStatus">SAFE</div>
+          </div>
+
+          <div class="item">
+            <strong>Violation</strong>
+            <div id="violationStatus">false</div>
+          </div>
+        </div>
       </div>
-      <div>
-        <span class="label">Head score:</span><span id="headScore">0</span>
-      </div>
-      <div><span class="label">Yaw:</span><span id="headYaw">0</span></div>
     </div>
 
     <script>
-      const img = document.getElementById("camera");
+      const liveUrl = "/devices/{{ device.id }}/live/";
 
-      const eyeStatusText = document.getElementById("eyeStatus");
-      const eyeStreakText = document.getElementById("eyeStreak");
+      function formatValue(value) {
+        if (value === null || value === undefined) {
+          return "-";
+        }
 
-      const headStatusText = document.getElementById("headStatus");
-      const headDirectionText = document.getElementById("headDirection");
-      const headScoreText = document.getElementById("headScore");
-      const headYawText = document.getElementById("headYaw");
+        if (typeof value === "number") {
+          return Number(value).toFixed(4);
+        }
 
-      const intervalMs = 500;
-      const eyeClosedFrames = 6; // đổi theo settings của bạn nếu cần
-
-      // load frame
-      setInterval(() => {
-        img.src = "/devices/{{ device.id }}/frame/?t=" + new Date().getTime();
-      }, intervalMs);
-
-      function updateStatus() {
-        fetch("/devices/{{ device.id }}/live/", {
-          headers: { "X-Requested-With": "XMLHttpRequest" },
-        })
-          .then((res) => res.json())
-          .then((data) => {
-            // ===== EYE =====
-            const eyeStreak = data.eye_closed_streak || 0;
-            eyeStreakText.innerText = eyeStreak;
-
-            if (eyeStreak >= eyeClosedFrames) {
-              eyeStatusText.innerText = "NGỦ GỤC";
-              eyeStatusText.style.color = "red";
-            } else if (eyeStreak > 0) {
-              eyeStatusText.innerText = "ĐANG NHẮM MẮT";
-              eyeStatusText.style.color = "orange";
-            } else {
-              eyeStatusText.innerText = "TỈNH TÁO";
-              eyeStatusText.style.color = "lime";
-            }
-
-            // ===== HEAD =====
-            const headStatus = data.head_status || "SAFE";
-            const headDirection = data.head_direction || "FORWARD";
-            const headScore = data.head_turn_score || 0;
-            const headYaw = data.head_yaw ?? 0;
-
-            headDirectionText.innerText = headDirection;
-            headScoreText.innerText = headScore;
-            headYawText.innerText = Number(headYaw).toFixed(1);
-
-            if (headStatus === "VIOLATION") {
-              headStatusText.innerText = "VI PHẠM";
-              headStatusText.style.color = "red";
-            } else if (headStatus === "TURNING") {
-              headStatusText.innerText = "ĐANG QUAY ĐẦU";
-              headStatusText.style.color = "orange";
-            } else {
-              headStatusText.innerText = "AN TOÀN";
-              headStatusText.style.color = "lime";
-            }
-          })
-          .catch(() => {
-            eyeStatusText.innerText = "ERROR";
-            eyeStatusText.style.color = "gray";
-
-            headStatusText.innerText = "ERROR";
-            headStatusText.style.color = "gray";
-          });
+        return value;
       }
 
-      setInterval(updateStatus, intervalMs);
-      updateStatus();
+      function setStatusClass(element, status) {
+        element.classList.remove("safe", "warning", "danger");
+
+        if (status === "SAFE" || status === "EYE_OPEN") {
+          element.classList.add("safe");
+        } else if (status === "TURNING" || status === "CALIBRATING") {
+          element.classList.add("warning");
+        } else if (
+          status === "VIOLATION" ||
+          status === "EYE_CLOSED" ||
+          status === "NO_FACE"
+        ) {
+          element.classList.add("danger");
+        }
+      }
+
+      async function refreshLiveView() {
+        try {
+          const res = await fetch(liveUrl, {
+            headers: {
+              "X-Requested-With": "XMLHttpRequest",
+            },
+          });
+
+          const data = await res.json();
+
+          if (!data.ok) {
+            return;
+          }
+
+          const img = document.getElementById("liveFrame");
+
+          if (data.latest_frame_url) {
+            img.src = data.latest_frame_url;
+          }
+
+          document.getElementById("latestFrameAt").innerText =
+            data.latest_frame_at || "-";
+          document.getElementById("latestAiAt").innerText =
+            data.latest_ai_at || "-";
+
+          const eyeStatus = document.getElementById("eyeStatus");
+          eyeStatus.innerText = data.ai_status || "UNKNOWN";
+          setStatusClass(eyeStatus, data.ai_status);
+
+          document.getElementById("isCalibrated").innerText =
+            data.is_calibrated;
+          document.getElementById("eyeClosedStreak").innerText =
+            data.eye_closed_streak ?? 0;
+          document.getElementById("ear").innerText = formatValue(data.ear);
+          document.getElementById("baselineEar").innerText = formatValue(
+            data.baseline_ear,
+          );
+
+          document.getElementById("headDirection").innerText =
+            data.head_direction || "FORWARD";
+          document.getElementById("headYaw").innerText = formatValue(
+            data.head_yaw,
+          );
+          document.getElementById("headTurnScore").innerText =
+            data.head_turn_score ?? 0;
+
+          const headStatus = document.getElementById("headStatus");
+          headStatus.innerText = data.head_status || "SAFE";
+          setStatusClass(headStatus, data.head_status);
+
+          const isViolation =
+            data.should_create_violation ||
+            data.should_create_head_turn_violation;
+
+          const violationStatus = document.getElementById("violationStatus");
+          violationStatus.innerText = isViolation ? "true" : "false";
+          setStatusClass(violationStatus, isViolation ? "VIOLATION" : "SAFE");
+        } catch (err) {
+          console.log("Live refresh error:", err);
+        }
+      }
+
+      setInterval(refreshLiveView, 500);
+      refreshLiveView();
     </script>
   </body>
 </html>

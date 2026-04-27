@@ -177,22 +177,18 @@ STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 
-# Thêm dòng này để django-cloudinary-storage không bị lỗi collectstatic
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
-
+# Chữa dứt điểm lỗi Manifest khi collectstatic
+STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
 
 STORAGES = {
     "default": {
-        # Nếu dùng Cloudinary cho media:
         "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
-
-        # Nếu CHƯA dùng Cloudinary, đổi thành:
-        # "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
     "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
 }
+
 
 
 # Default primary key field type

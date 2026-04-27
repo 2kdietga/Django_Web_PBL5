@@ -18,7 +18,9 @@ class Device(models.Model):
 
     latest_frame = models.ImageField(upload_to='live/', null=True, blank=True)
     latest_frame_at = models.DateTimeField(null=True, blank=True)
-
+    latest_ai_status = models.CharField(max_length=100, blank=True, default="")
+    latest_ai_json = models.JSONField(default=dict, blank=True)
+    latest_ai_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.name

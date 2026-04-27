@@ -15,6 +15,7 @@ __pycache__
 db.sqlite3
 media
 staticfiles
+static/admin
 
 .pytest_cache
 .mypy_cache
