@@ -1,0 +1,120 @@
+{% load static %}
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Đăng ký | QL Vi phạm</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <link rel="stylesheet" href="{% static 'css/bootstrap.css' %}" />
+    <link rel="stylesheet" href="{% static 'css/ui.css' %}" />
+    <link rel="stylesheet" href="{% static 'css/responsive.css' %}" />
+
+    <style>
+      body {
+        background: #f6f7fb;
+      }
+      .wrap {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="container">
+        <div class="row justify-content-center">
+          <div class="col-md-6 col-lg-5">
+            <div class="text-center mb-4">
+              <h3 class="font-weight-bold">QL Vi phạm tài xế</h3>
+              <div class="text-muted">Tạo tài khoản</div>
+            </div>
+
+            <div class="card shadow-sm">
+              <div class="card-body p-4">
+                {% if messages %} {% for message in messages %}
+                <div class="alert alert-{{ message.tags }} mb-3" role="alert">
+                  {{ message }}
+                </div>
+                {% endfor %} {% endif %}
+
+                <form method="POST" novalidate>
+                  {% csrf_token %}
+
+                  <div class="form-row">
+                    <div class="form-group col-md-6">
+                      <label>Họ</label>
+                      {{ form.last_name }}
+                      <div class="text-danger small mt-1">
+                        {{ form.last_name.errors|striptags }}
+                      </div>
+                    </div>
+                    <div class="form-group col-md-6">
+                      <label>Tên</label>
+                      {{ form.first_name }}
+                      <div class="text-danger small mt-1">
+                        {{ form.first_name.errors|striptags }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label>Username</label>
+                    {{ form.username }}
+                    <div class="text-danger small mt-1">
+                      {{ form.username.errors|striptags }}
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label>Email</label>
+                    {{ form.email }}
+                    <div class="text-danger small mt-1">
+                      {{ form.email.errors|striptags }}
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label>Số điện thoại</label>
+                    {{ form.phone_number }}
+                    <div class="text-danger small mt-1">
+                      {{ form.phone_number.errors|striptags }}
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label>Mật khẩu</label>
+                    {{ form.password1 }}
+                  </div>
+
+                  <div class="form-group">
+                    <label>Nhập lại mật khẩu</label>
+                    {{ form.password2 }} {% if form.non_field_errors %}
+                    <div class="text-danger small mt-1">
+                      {{ form.non_field_errors|striptags }}
+                    </div>
+                    {% endif %}
+                  </div>
+
+                  <button type="submit" class="btn btn-primary btn-block">
+                    Đăng ký
+                  </button>
+
+                  <div class="text-center mt-3 small">
+                    Đã có tài khoản?
+                    <a href="{% url 'login' %}">Đăng nhập</a>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="{% static 'js/jquery-2.0.0.min.js' %}"></script>
+    <script src="{% static 'js/bootstrap.bundle.min.js' %}"></script>
+    <script src="{% static 'js/script.js' %}"></script>
+  </body>
+</html>

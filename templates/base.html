@@ -1,0 +1,82 @@
+{% load static %}
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>{% block title %}QL Vi phạm{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <link rel="stylesheet" href="{% static 'css/bootstrap.css' %}" />
+    <link rel="stylesheet" href="{% static 'css/ui.css' %}" />
+    <link rel="stylesheet" href="{% static 'css/responsive.css' %}" />
+
+    <style>
+      body {
+        background: #f6f7fb;
+      }
+      .page-header {
+        padding: 20px 0;
+      }
+      .badge-pill {
+        border-radius: 999px;
+      }
+    </style>
+
+    {% block extra_head %}{% endblock %}
+  </head>
+
+  <body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-white border-bottom">
+      <div class="container">
+        <a
+          class="navbar-brand font-weight-bold"
+          href="{% url 'violation_list' %}"
+          >QL Vi phạm</a
+        >
+
+        <ul class="navbar-nav mr-auto">
+          <li
+            class="nav-item {% if request.resolver_match.url_name == 'violation_list' %}active{% endif %}"
+          >
+            <a class="nav-link" href="{% url 'violation_list' %}">Vi phạm</a>
+          </li>
+
+          <!-- Nếu chưa có trang profile thì để # hoặc comment -->
+          <li class="nav-item">
+            <a class="nav-link" href="{% url 'profile' %}">Thông tin cá nhân</a>
+          </li>
+        </ul>
+
+        <div class="d-flex align-items-center">
+          {% if request.user.is_authenticated %}
+          <span class="text-muted mr-3">
+            {{ request.user.get_full_name|default:request.user.email }}
+          </span>
+          <a class="btn btn-outline-secondary btn-sm" href="{% url 'logout' %}">
+            Đăng xuất
+          </a>
+          {% else %}
+          <a class="btn btn-primary btn-sm" href="{% url 'login' %}">
+            Đăng nhập
+          </a>
+          {% endif %}
+        </div>
+      </div>
+    </nav>
+
+    <main class="container py-4">
+      {% if messages %} {% for message in messages %}
+      <div class="alert alert-{{ message.tags }} mb-3" role="alert">
+        {{ message }}
+      </div>
+      {% endfor %} {% endif %} {% block content %}{% endblock %}
+    </main>
+
+    <script src="{% static 'js/jquery-2.0.0.min.js' %}"></script>
+    <script src="{% static 'js/bootstrap.bundle.min.js' %}"></script>
+    <script src="{% static 'js/script.js' %}"></script>
+
+    {% block extra_js %}{% endblock %}
+  </body>
+</html>

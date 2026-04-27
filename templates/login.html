@@ -1,0 +1,90 @@
+{% load static %}
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Đăng nhập | QL Vi phạm</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <link rel="stylesheet" href="{% static 'css/bootstrap.css' %}" />
+    <link rel="stylesheet" href="{% static 'css/ui.css' %}" />
+    <link rel="stylesheet" href="{% static 'css/responsive.css' %}" />
+
+    <style>
+      body {
+        background: #f6f7fb;
+      }
+      .login-wrap {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="login-wrap">
+      <div class="container">
+        <div class="row justify-content-center">
+          <div class="col-md-5">
+            <div class="text-center mb-4">
+              <h3 class="font-weight-bold">QL Vi phạm tài xế</h3>
+              <div class="text-muted">Đăng nhập hệ thống nội bộ</div>
+            </div>
+
+            <div class="card shadow-sm">
+              <div class="card-body p-4">
+                {% if messages %} {% for message in messages %}
+                <div class="alert alert-{{ message.tags }} mb-3" role="alert">
+                  {{ message }}
+                </div>
+                {% endfor %} {% endif %}
+
+                <form method="POST" action="{% url 'login' %}">
+                  {% csrf_token %}
+
+                  <div class="form-group">
+                    <label>Email</label>
+                    <input
+                      type="email"
+                      name="email"
+                      class="form-control"
+                      placeholder="email@example.com"
+                      required
+                      autofocus
+                    />
+                  </div>
+
+                  <div class="form-group">
+                    <label>Mật khẩu</label>
+                    <input
+                      type="password"
+                      name="password"
+                      class="form-control"
+                      required
+                    />
+                  </div>
+
+                  <button type="submit" class="btn btn-primary btn-block">
+                    Đăng nhập
+                  </button>
+                </form>
+
+                <div class="text-center small mt-3">
+                  Chưa có tài khoản?
+                  <a href="{% url 'register' %}" class="font-weight-bold">
+                    Tạo tài khoản
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="{% static 'js/jquery-2.0.0.min.js' %}"></script>
+    <script src="{% static 'js/bootstrap.bundle.min.js' %}"></script>
+    <script src="{% static 'js/script.js' %}"></script>
+  </body>
+</html>

@@ -1,0 +1,206 @@
+{% extends "base.html" %} {% load static %} {% block content %}
+<nav class="navbar navbar-light bg-white border-bottom">
+  <div class="container d-flex justify-content-between align-items-center">
+    <a class="btn btn-link text-dark p-0" href="javascript:history.back()">
+      <span class="mr-2">←</span> Quay lại
+    </a>
+    <span class="text-muted small">Chi tiết vi phạm</span>
+  </div>
+</nav>
+
+<div class="container py-4">
+  <div class="row">
+    <!-- Left: Evidence -->
+    <div class="col-lg-5 mb-3">
+      <div class="card shadow-sm">
+        <div class="card-header bg-white">
+          <strong>Bằng chứng</strong>
+        </div>
+
+        <div class="card-body">
+          {% if violation.video %}
+          <video
+            class="w-100 rounded border"
+            controls
+            preload="metadata"
+            playsinline
+          >
+            <source src="{{ violation.video.url }}" type="video/mp4" />
+            Trình duyệt của bạn không hỗ trợ video.
+          </video>
+          {% elif violation.image %}
+          <img
+            src="{{ violation.image.url }}"
+            class="img-fluid rounded border"
+            alt="Bằng chứng"
+            loading="lazy"
+          />
+          {% else %}
+          <div class="text-center text-muted py-5 border rounded">
+            Chưa có hình ảnh hoặc video bằng chứng
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Details -->
+    <div class="col-lg-7">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start mb-3">
+            <div>
+              <h4 class="mb-1">Chi tiết vi phạm</h4>
+              <div class="text-muted small">
+                Mã: <span class="font-weight-bold">#{{ violation.id }}</span>
+              </div>
+            </div>
+
+            <span
+              class="badge badge-pill px-3 py-2 {% if violation.category.severality_level == 2 %}badge-danger{% else %}badge-secondary{% endif %}"
+            >
+              {% if violation.category.severality_level == 2 %} Nghiêm trọng
+              <!--  -->
+              {%else %} Nhắc nhở {% endif %}
+            </span>
+          </div>
+
+          <hr class="my-3" />
+
+          <div class="mb-2 d-flex">
+            <div class="text-muted" style="width: 160px">Tài xế</div>
+            <div class="font-weight-bold">
+              {{violation.reporter.get_full_name|default:violation.reporter.username}}
+            </div>
+          </div>
+
+          <div class="mb-2 d-flex">
+            <div class="text-muted" style="width: 160px">Thời gian</div>
+            <div>{{ violation.reported_at }}</div>
+          </div>
+
+          <div class="mb-2 d-flex">
+            <div class="text-muted" style="width: 160px">Loại lỗi</div>
+            <div>{{ violation.category.name }}</div>
+          </div>
+
+          <div class="mb-2 d-flex">
+            <div class="text-muted" style="width: 160px">Xe</div>
+            <div class="font-weight-bold">
+              {{ violation.vehicle.license_plate }}
+            </div>
+          </div>
+
+          <div class="mb-2 d-flex">
+            <div class="text-muted" style="width: 160px">Trạng thái xem</div>
+            <div>
+              {% if violation.viewed %}
+              <span class="badge badge-success">Đã xem</span>
+              {% else %}
+              <span class="badge badge-warning">Chưa xem</span>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="mb-2 d-flex">
+            <div class="text-muted" style="width: 160px">Trạng thái xử lý</div>
+            <div>
+              {% if violation.status == "pending" %}
+              <span class="badge badge-warning">Chờ xử lý</span>
+              {% elif violation.status == "confirmed" %}
+              <span class="badge badge-danger">Đã xác nhận</span>
+              {% elif violation.status == "dismissed" %}
+              <span class="badge badge-secondary">Đã hủy</span>
+              {% elif violation.status == "appealed" %}
+              <span class="badge badge-info">Đang kháng cáo</span>
+              {% else %}
+              <span class="badge badge-light">{{ violation.status }}</span>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="mt-3 p-3 bg-light rounded">
+            <div class="text-muted small mb-1">Mô tả</div>
+            <div
+              class="{% if not violation.description %}text-muted{% endif %}"
+            >
+              {{ violation.description|default:"Không có mô tả" }}
+            </div>
+          </div>
+
+          <div class="mt-4">
+            <h5 class="mb-3">Kháng cáo</h5>
+
+            {% if appeal %}
+            <div class="border rounded p-3 bg-light">
+              <div class="mb-2">
+                <strong>Trạng thái đơn:</strong>
+                {% if appeal.status == "pending" %}
+                <span class="badge badge-warning">Chờ duyệt</span>
+                {% elif appeal.status == "approved" %}
+                <span class="badge badge-success">Đã chấp nhận</span>
+                {% elif appeal.status == "rejected" %}
+                <span class="badge badge-danger">Bị từ chối</span>
+                {% else %}
+                <span class="badge badge-light">{{ appeal.status }}</span>
+                {% endif %}
+              </div>
+
+              <div class="mb-2">
+                <div class="text-muted small">Lý do kháng cáo</div>
+                <div>{{ appeal.reason }}</div>
+              </div>
+
+              <div class="mb-2">
+                <div class="text-muted small">Ngày gửi</div>
+                <div>{{ appeal.created_at }}</div>
+              </div>
+
+              {% if appeal.admin_note %}
+              <div class="mb-2">
+                <div class="text-muted small">Phản hồi từ quản trị viên</div>
+                <div>{{ appeal.admin_note }}</div>
+              </div>
+              {% endif %} {% if appeal.reviewed_at %}
+              <div>
+                <div class="text-muted small">Ngày duyệt</div>
+                <div>{{ appeal.reviewed_at }}</div>
+              </div>
+              {% endif %}
+            </div>
+            {% else %}
+            <form method="post" action="{% url 'create_appeal' violation.id %}">
+              {% csrf_token %}
+              <div class="form-group">
+                <label for="reason">Lý do kháng cáo</label>
+                <textarea
+                  name="reason"
+                  id="reason"
+                  rows="4"
+                  class="form-control"
+                  placeholder="Nhập lý do vì sao bạn cho rằng lỗi này chưa hợp lý..."
+                  required
+                ></textarea>
+              </div>
+
+              <button type="submit" class="btn btn-warning">
+                Gửi kháng cáo
+              </button>
+            </form>
+            {% endif %}
+          </div>
+
+          <div class="mt-4 d-flex justify-content-end">
+            <a
+              class="btn btn-outline-secondary"
+              href="{% url 'violation_list' %}"
+            >
+              Đóng
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

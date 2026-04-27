@@ -1,0 +1,97 @@
+{% extends "base.html" %} {% block content %}
+<div class="container">
+  <div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+      <h4 class="mb-1">Danh sách vi phạm</h4>
+      <div class="text-muted">Các vi phạm được ghi nhận</div>
+    </div>
+  </div>
+
+  <!-- Filter -->
+  <form method="get" class="row g-3 align-items-end">
+  <div class="col-md-3">
+    <label class="form-label">Từ ngày</label>
+    <input type="date" class="form-control" name="from_date" value="{{ from_date|default:'' }}">
+  </div>
+
+  <div class="col-md-3">
+    <label class="form-label">Đến ngày</label>
+    <input type="date" class="form-control" name="to_date" value="{{ to_date|default:'' }}">
+  </div>
+
+  <div class="col-md-4">
+    <label class="form-label">Loại lỗi</label>
+    <select class="form-control" name="category">
+      <option value="">Tất cả</option>
+      {% for category in links %}
+      <option value="{{ category.id }}" {% if category.id|stringformat:"s" == selected_category %} selected {% endif %}>
+        {{ category.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="col-md-2 d-flex gap-2">
+    <button class="btn btn-primary w-100" type="submit">
+      <i class="fa fa-filter mr-1"></i> Lọc
+    </button>
+    <a class="btn btn-light w-100" href="{% url 'violation_list' %}">
+      Reset
+    </a>
+  </div>
+</form>
+
+  <!-- Table -->
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <table class="table table-hover">
+        <thead class="thead-light">
+          <tr>
+            <th>Thời gian</th>
+            <th>Loại lỗi</th>
+            <th>Xe</th>
+            <th>Mức độ</th>
+            <th>Trạng thái</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if not violations %}
+          <tr>
+            <td colspan="6" class="text-center text-muted">
+              Không có vi phạm nào.
+            </td>
+          </tr>
+          {% endif %}
+          {% for violation in violations %}
+          <tr>
+            <td>{{ violation.reported_at }}</td>
+            <td>{{violation.category.name}}</td>
+            <td>{{ violation.vehicle.license_plate }}</td>
+            <td>
+              <span
+                class="badge badge-pill {% if violation.category.severality_level == 2 %} badge-danger {% else %} badge-secondary {% endif %}"
+              >
+                {% if violation.category.severality_level == 2 %} Nghiêm trọng
+                {% else %} Nhắc nhở {% endif %}
+              </span>
+            </td>
+            <td>
+              {% if violation.viewed %}
+              <span class="badge badge-success">Đã xem</span>
+              {% else %}
+              <span class="badge badge-light border">Chưa xem</span>
+              {% endif %}
+            <td class="text-right">
+              <a class="btn btn-light btn-sm" href="{% url 'violation_detail' violation.id %}">
+  Chi tiết
+</a>
+            </td>   
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
