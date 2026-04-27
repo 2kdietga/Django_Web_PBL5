@@ -114,7 +114,7 @@ LOGOUT_REDIRECT_URL = 'login'
 # }
 
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://dautay90:lK2V99OWdpmB2WiKIdx4jXYzp91ap8eY@dpg-d7nib3u8bjmc738s2on0-a.singapore-postgres.render.com/dbpbl5")
 
 if DATABASE_URL:
     DATABASES = {
