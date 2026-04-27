@@ -178,7 +178,7 @@ STATICFILES_DIRS = [
 ]
 
 # # Chữa dứt điểm lỗi Manifest khi collectstatic
-# STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
+STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
 
 STORAGES = {
     "default": {
