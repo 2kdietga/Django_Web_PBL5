@@ -13,23 +13,32 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+import dj_database_url
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+load_dotenv(BASE_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-@p2@-2p@gibg=*!o_!&%9zc8-ip!n)a$qqq2*f*4-12e%9g7q^'
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key")
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("DEBUG", "False").lower() == "true"
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get(
+        "ALLOWED_HOSTS",
+        "localhost,127.0.0.1",
+    ).split(",")
+    if host.strip()
+]
 
 
-AI_SERVER_URL = os.environ.get("AI_SERVER_URL", "http://127.0.0.1:8001")
+AI_SERVER_URL = os.environ.get("AI_SERVER_URL", "https://fastapi-ai-pbl5.onrender.com")
 AI_SERVICE_TOKEN = os.environ.get("AI_SERVICE_TOKEN", "dev-ai-secret-token")
 AI_TIMEOUT_SECONDS = int(os.environ.get("AI_TIMEOUT_SECONDS", "10"))
 
@@ -37,6 +46,9 @@ AI_TIMEOUT_SECONDS = int(os.environ.get("AI_TIMEOUT_SECONDS", "10"))
 # Application definition
 
 INSTALLED_APPS = [
+    "cloudinary_storage",
+    "cloudinary",
+
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -54,6 +66,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -99,17 +113,28 @@ LOGOUT_REDIRECT_URL = 'login'
 #     }
 # }
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'pbl5_db',          # Tên database bạn vừa tạo ở Bước 2
-        'USER': 'postgres',         # Tài khoản mặc định luôn là postgres
-        'PASSWORD': 'dautay90', # Nhập cái mật khẩu ở Bước 1 vào đây
-        'HOST': 'localhost',        # Chạy trên máy tính cá nhân
-        'PORT': '5432',             # Cổng mặc định của PostgreSQL
-    }
-}
 
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+if DATABASE_URL:
+    DATABASES = {
+        "default": dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
+    }
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.environ.get("DB_NAME", "pbl5_db"),
+            "USER": os.environ.get("DB_USER", "postgres"),
+            "PASSWORD": os.environ.get("DB_PASSWORD", "dautay90"),
+            "HOST": os.environ.get("DB_HOST", "localhost"),
+            "PORT": os.environ.get("DB_PORT", "5432"),
+        }
+    }
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -145,9 +170,29 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'static'
-STATICFILES_DIRS = ['Django_Web/static']
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+STATICFILES_DIRS = [
+    BASE_DIR / "static",
+]
+
+# Thêm dòng này để django-cloudinary-storage không bị lỗi collectstatic
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
+
+STORAGES = {
+    "default": {
+        # Nếu dùng Cloudinary cho media:
+        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+
+        # Nếu CHƯA dùng Cloudinary, đổi thành:
+        # "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 
 # Default primary key field type
@@ -155,5 +200,12 @@ STATICFILES_DIRS = ['Django_Web/static']
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+
+
+CLOUDINARY_STORAGE = {
+    "CLOUD_NAME": os.environ.get("CLOUDINARY_CLOUD_NAME"),
+    "API_KEY": os.environ.get("CLOUDINARY_API_KEY"),
+    "API_SECRET": os.environ.get("CLOUDINARY_API_SECRET"),
+}
+
+MEDIA_URL = "/media/"

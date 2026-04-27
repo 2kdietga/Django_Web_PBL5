@@ -12,10 +12,9 @@ from devices.services import save_latest_frame
 from violations.models import Violation
 from devices.models import Device
 
-from .video_utils import export_frames_to_mp4
-
 from .ai_client import analyze_frame_with_ai_server, AIServiceError
 from .frame_buffer import add_frame, get_frames, clear_frames
+from .video_utils import export_frames_to_mp4_file, cleanup_exported_video
 
 
 class UploadAndDetectAPIView(APIView):
@@ -60,6 +59,7 @@ class UploadAndDetectAPIView(APIView):
             image.seek(0)
             save_latest_frame(device, image)
             image.seek(0)
+
         except Exception as e:
             return Response(
                 {
@@ -74,8 +74,8 @@ class UploadAndDetectAPIView(APIView):
             image.seek(0)
             add_frame(device.token, image)
             image.seek(0)
+
         except Exception:
-            # Không nên làm chết request chỉ vì buffer lỗi
             image.seek(0)
 
         # ===== 4. DRIVER =====
@@ -117,6 +117,29 @@ class UploadAndDetectAPIView(APIView):
                 },
                 status=500,
             )
+
+        # ===== 6.1 SAVE LATEST AI RESULT FOR LIVE VIEW =====
+        try:
+            update_fields = []
+
+            if hasattr(device, "latest_ai_status"):
+                device.latest_ai_status = result.get("status", "UNKNOWN")
+                update_fields.append("latest_ai_status")
+
+            if hasattr(device, "latest_ai_json"):
+                device.latest_ai_json = result
+                update_fields.append("latest_ai_json")
+
+            if hasattr(device, "latest_ai_at"):
+                device.latest_ai_at = timezone.now()
+                update_fields.append("latest_ai_at")
+
+            if update_fields:
+                device.save(update_fields=update_fields)
+
+        except Exception:
+            # Không làm chết request chỉ vì lỗi lưu trạng thái live
+            pass
 
         # ===== 7. READ RESULT =====
         status_eye = result.get("status", "UNKNOWN")
@@ -222,12 +245,16 @@ class UploadAndDetectAPIView(APIView):
             )
 
         # ===== 11. EXPORT VIDEO FROM DJANGO BUFFER =====
-        video_rel_path = None
+        exported_video = None
 
         try:
             fps = int(getattr(settings, "DROWSINESS_FPS", 5))
             video_frames = get_frames(device.token)
-            video_rel_path = export_frames_to_mp4(video_frames, fps=fps)
+
+            exported_video = export_frames_to_mp4_file(
+                frames=video_frames,
+                fps=fps,
+            )
 
         except Exception as e:
             return Response(
@@ -239,20 +266,63 @@ class UploadAndDetectAPIView(APIView):
             )
 
         # ===== 12. CREATE VIOLATION =====
-        violation = Violation.objects.create(
-            category=category,
-            reporter=reporter,
-            vehicle=vehicle,
-            title=violation_title,
-            description=violation_description,
-            video=video_rel_path,
-        )
+        violation = None
 
-        image.seek(0)
-        violation.image.save(image.name, image, save=True)
+        try:
+            violation = Violation.objects.create(
+                category=category,
+                reporter=reporter,
+                vehicle=vehicle,
+                title=violation_title,
+                description=violation_description,
+            )
 
-        # Sau khi tạo vi phạm thì clear buffer để video sau không bị dính frame cũ
-        clear_frames(device.token)
+            # Save image
+            try:
+                image.seek(0)
+
+                image_name = image.name or "violation.jpg"
+                if "." not in image_name:
+                    image_name = f"{image_name}.jpg"
+
+                violation.image.save(
+                    image_name,
+                    image,
+                    save=False,
+                )
+
+            except Exception as e:
+                raise RuntimeError(f"Failed to save violation image: {str(e)}")
+
+            # Save video
+            try:
+                if exported_video:
+                    exported_video.file.seek(0)
+
+                    violation.video.save(
+                        exported_video.filename,
+                        exported_video.file,
+                        save=False,
+                    )
+
+            except Exception as e:
+                raise RuntimeError(f"Failed to save violation video: {str(e)}")
+
+            violation.save()
+
+            clear_frames(device.token)
+
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "Failed to create violation",
+                    "error": str(e),
+                },
+                status=500,
+            )
+
+        finally:
+            cleanup_exported_video(exported_video)
 
         return Response(
             {
@@ -268,9 +338,11 @@ class UploadAndDetectAPIView(APIView):
                 "head_status": head_status,
                 "violation": True,
                 "created": True,
-                "violation_id": violation.id,
+                "violation_id": violation.id if violation else None,
                 "violation_kind": violation_kind,
-                "has_video": bool(video_rel_path),
+                "has_video": bool(exported_video),
+                "image_url": violation.image.url if violation and violation.image else None,
+                "video_url": violation.video.url if violation and violation.video else None,
             },
             status=201,
         )
