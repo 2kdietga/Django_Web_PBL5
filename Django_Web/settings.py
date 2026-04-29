@@ -204,4 +204,5 @@ CLOUDINARY_STORAGE = {
     "API_SECRET": os.environ.get("CLOUDINARY_API_SECRET"),
 }
 
+MEDIA_ROOT = BASE_DIR / "media"
 MEDIA_URL = "/media/"

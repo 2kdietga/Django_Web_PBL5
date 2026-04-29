@@ -1,52 +1,76 @@
+import mimetypes
 import os
 
-from django.http import FileResponse, Http404, JsonResponse
-from django.shortcuts import get_object_or_404, render, redirect
 from django.conf import settings
+from django.http import FileResponse, Http404, JsonResponse
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
 from .models import Device
+
+
+def _local_media_path_from_field(file_field):
+    """
+    Lấy path local từ file_field.name.
+
+    Không dùng file_field.path trước, vì nếu default storage là Cloudinary
+    thì .path có thể lỗi hoặc không tồn tại.
+    """
+    if not file_field:
+        return None
+
+    name = getattr(file_field, "name", None)
+    if not name:
+        return None
+
+    # Chống path traversal
+    safe_name = name.replace("\\", "/").lstrip("/")
+    abs_path = os.path.abspath(os.path.join(settings.MEDIA_ROOT, safe_name))
+    media_root = os.path.abspath(settings.MEDIA_ROOT)
+
+    if not abs_path.startswith(media_root):
+        return None
+
+    return abs_path
 
 
 def device_latest_frame(request, id):
     """
     Trả frame mới nhất của device.
 
-    Hỗ trợ cả:
-    - local FileSystemStorage: dùng FileResponse từ .path
-    - Cloudinary/storage ngoài: redirect tới .url
+    Ưu tiên:
+    1. Local file trong MEDIA_ROOT/live_frames/...
+    2. Fallback sang storage URL nếu là file cũ trên Cloudinary
     """
     device = get_object_or_404(Device, id=id)
 
     if not device.latest_frame:
         raise Http404("No frame available")
 
-    # Nếu storage có URL thì dùng được cho cả local và Cloudinary
+    # Ưu tiên đọc local bằng latest_frame.name
+    frame_path = _local_media_path_from_field(device.latest_frame)
+
+    if frame_path and os.path.exists(frame_path):
+        content_type, _encoding = mimetypes.guess_type(frame_path)
+        content_type = content_type or "image/jpeg"
+
+        response = FileResponse(
+            open(frame_path, "rb"),
+            content_type=content_type,
+        )
+
+        response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response["Pragma"] = "no-cache"
+        response["Expires"] = "0"
+
+        return response
+
+    # Fallback cho dữ liệu cũ nếu trước đó latest_frame đã nằm trên Cloudinary
     try:
         frame_url = device.latest_frame.url
     except Exception:
         frame_url = None
 
-    # Nếu có path local thì serve trực tiếp
-    try:
-        frame_path = device.latest_frame.path
-
-        if frame_path and os.path.exists(frame_path):
-            response = FileResponse(
-                open(frame_path, "rb"),
-                content_type="image/jpeg",
-            )
-
-            response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-            response["Pragma"] = "no-cache"
-            response["Expires"] = "0"
-
-            return response
-
-    except Exception:
-        pass
-
-    # Nếu không có path local, ví dụ Cloudinary, redirect sang URL file
     if frame_url:
         return redirect(frame_url)
 
@@ -93,14 +117,10 @@ def device_live_view(request, id):
         latest_frame_url = None
 
         if device.latest_frame:
-            try:
-                # Dùng route của Django để local/Cloudinary đều chạy
-                latest_frame_url = (
-                    f"/devices/{device.id}/frame/"
-                    f"?t={int(timezone.now().timestamp() * 1000)}"
-                )
-            except Exception:
-                latest_frame_url = None
+            latest_frame_url = (
+                f"/devices/{device.id}/frame/"
+                f"?t={int(timezone.now().timestamp() * 1000)}"
+            )
 
         return JsonResponse(
             {
