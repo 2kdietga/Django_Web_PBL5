@@ -20,6 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv(BASE_DIR / ".env")
 
+# Bật tắt debug timing cho API, sẽ log thời gian của từng bước nếu bật
 API_DEBUG_TIMING = False
 
 

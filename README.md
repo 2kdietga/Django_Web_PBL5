@@ -7,7 +7,7 @@
 - Đăng ký, đăng nhập, đăng xuất và cập nhật hồ sơ người dùng.
 - Quản lý tài khoản tùy biến bằng email, có hỗ trợ `card_uid` để nhận diện tài xế qua RFID.
 - Quản lý phương tiện theo biển số, mẫu xe và ngày đăng ký.
-- Quản lý thiết bị bằng `token`, liên kết thiết bị với phương tiện, lưu frame live mới nhất và kết quả AI mới nhất.
+- Quản lý thiết bị bằng `token`, liên kết thiết bị với phương tiện, lưu đường dẫn frame live mới nhất trên local disk và kết quả AI mới nhất.
 - Nhận frame từ thiết bị qua REST API `/api/upload/`.
 - Gọi FastAPI AI server để phân tích:
   - trạng thái mắt, EAR, baseline EAR, số frame nhắm mắt liên tiếp;
@@ -17,8 +17,9 @@
 - Người dùng xem danh sách vi phạm của chính mình, lọc theo ngày và loại vi phạm.
 - Người dùng xem chi tiết vi phạm và gửi đơn kháng cáo.
 - Admin/staff xem danh sách kháng cáo, duyệt hoặc từ chối kháng cáo.
-- Trang live view theo thiết bị, tự động refresh frame và trạng thái AI.
-- Hỗ trợ Cloudinary cho media, WhiteNoise cho static file và Gunicorn/Docker để deploy.
+- Trang live view theo thiết bị, tự động refresh frame local và trạng thái AI.
+- Live frame không upload lên Cloudinary; chỉ lưu tạm ở local để giảm độ trễ và chi phí lưu trữ.
+- Hỗ trợ Cloudinary cho ảnh/video bằng chứng vi phạm, WhiteNoise cho static file và Gunicorn/Docker để deploy.
 
 ## Công nghệ sử dụng
 
@@ -47,7 +48,7 @@ Django_Web/
 ├── templates/           # Giao diện HTML
 ├── static/              # CSS/JS nguồn
 ├── staticfiles/         # Static sau collectstatic
-├── media/               # Media local nếu không dùng Cloudinary
+├── media/               # Media local, gồm live_frames/ cho frame live
 ├── manage.py
 ├── requirements.txt
 ├── Dockerfile
@@ -96,7 +97,7 @@ Model `Device` gồm:
 - `vehicle`: phương tiện đang gắn thiết bị
 - `is_active`: trạng thái hoạt động
 - `last_seen`: thời điểm thiết bị gửi dữ liệu gần nhất
-- `latest_frame`, `latest_frame_at`: frame live mới nhất
+- `latest_frame_path`, `latest_frame_at`: đường dẫn frame live mới nhất trên local disk
 - `latest_ai_status`, `latest_ai_json`, `latest_ai_at`: kết quả AI mới nhất
 
 Các route chính:
@@ -179,7 +180,7 @@ Luồng xử lý:
 2. Kiểm tra `X-DEVICE-TOKEN`.
 3. Tìm `Device` đang active theo token.
 4. Cập nhật `last_seen`.
-5. Lưu frame mới nhất để phục vụ live view.
+5. Lưu frame mới nhất vào `MEDIA_ROOT/live_frames/device_<id>/` để phục vụ live view, không upload Cloudinary.
 6. Đưa frame vào buffer để có thể xuất video bằng chứng.
 7. Tìm tài xế theo `card_uid`.
 8. Kiểm tra thiết bị đã liên kết với phương tiện.
@@ -240,7 +241,7 @@ Thiết bị camera/RFID
 Django_Web
     ↓ xác thực token thiết bị
     ↓ tìm tài xế theo card_uid
-    ↓ lưu latest frame + buffer frame
+    ↓ lưu latest frame local + buffer frame
 FastAPI AI Server
     ↓ trả kết quả phân tích mắt/đầu
 Django_Web
@@ -443,10 +444,16 @@ Response AI server nên trả các field mà Django đang đọc:
   - nguồn nằm trong `static/`;
   - sau `collectstatic` được đưa vào `staticfiles/`;
   - WhiteNoise được dùng trong middleware để phục vụ static file production.
-- Media:
+- Media bằng chứng:
   - default storage đang dùng `MediaCloudinaryStorage`;
   - ảnh/video vi phạm lưu lên Cloudinary nếu cấu hình Cloudinary đầy đủ;
-  - route `/devices/<id>/frame/` hỗ trợ cả file local và URL storage ngoài như Cloudinary.
+  - các file này dùng cho trang chi tiết vi phạm và kháng cáo.
+- Live frame:
+  - không dùng `MediaCloudinaryStorage` và không upload Cloudinary;
+  - mỗi frame mới được ghi trực tiếp vào `MEDIA_ROOT/live_frames/device_<id>/`;
+  - `Device.latest_frame_path` lưu relative path của frame mới nhất;
+  - service `save_latest_frame()` giữ tối đa `LIVE_FRAME_KEEP = 5` file gần nhất cho mỗi thiết bị và tự xóa frame cũ;
+  - route `/devices/<id>/frame/` trả frame mới nhất để màn hình live refresh liên tục.
 
 ## Chạy bằng Docker
 
@@ -478,7 +485,7 @@ Dự án đã chuẩn bị cho môi trường production như Render hoặc dị
 - Port mặc định trong Docker là `10000`.
 - Database ưu tiên đọc từ `DATABASE_URL`.
 - Static file được phục vụ qua WhiteNoise.
-- Media có thể lưu trên Cloudinary.
+- Ảnh/video vi phạm có thể lưu trên Cloudinary; live frame vẫn lưu local trong `MEDIA_ROOT/live_frames/`.
 
 Các biến môi trường production tối thiểu:
 
@@ -493,6 +500,8 @@ CLOUDINARY_CLOUD_NAME=...
 CLOUDINARY_API_KEY=...
 CLOUDINARY_API_SECRET=...
 ```
+
+Nếu deployment chỉ cần live view mà chưa cần lưu ảnh/video bằng chứng lên Cloudinary, live frame vẫn hoạt động bằng local storage. Khi cần lưu bằng chứng vi phạm trên Cloudinary thì phải cấu hình đủ ba biến `CLOUDINARY_*`.
 
 ## Ghi chú bảo mật
 
@@ -562,8 +571,9 @@ Django gọi FastAPI AI server thất bại. Kiểm tra:
 Kiểm tra:
 
 - thiết bị đã gửi frame thành công chưa;
-- `Device.latest_frame` có dữ liệu không;
-- Cloudinary/media storage có cấu hình đúng không;
+- `Device.latest_frame_path` có dữ liệu không;
+- file tương ứng có tồn tại trong `MEDIA_ROOT/live_frames/device_<id>/` không;
+- tiến trình Django/container có quyền ghi vào thư mục `media/live_frames/` không;
 - route `/devices/<id>/frame/` có trả ảnh không.
 
 ## Trạng thái hiện tại của README
