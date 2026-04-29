@@ -1,32 +1,60 @@
 from datetime import timedelta
 
-from django.utils import timezone
 from django.conf import settings
+from django.utils import timezone
 
-from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from accounts.models import Account
 from categories.models import Category
+from devices.models import Device
 from devices.services import save_latest_frame
 from violations.models import Violation
-from devices.models import Device
 
-from .ai_client import analyze_frame_with_ai_server, AIServiceError
-from .frame_buffer import add_frame, get_frames, clear_frames
-from .video_utils import export_frames_to_mp4_file, cleanup_exported_video
+from .ai_client import AIServiceError, analyze_frame_with_ai_server
+from .frame_buffer import add_frame, clear_frames, get_frames
+from .timing import StepTimer
+from .video_utils import cleanup_exported_video, export_frames_to_mp4_file
 
 
 class UploadAndDetectAPIView(APIView):
     authentication_classes = []
     permission_classes = []
 
+    def _timer_enabled(self):
+        """
+        Bật/tắt debug timing.
+
+        Trong settings.py có thể thêm:
+        API_DEBUG_TIMING = True
+
+        Nếu không khai báo, mặc định chạy theo DEBUG.
+        """
+        return bool(getattr(settings, "API_DEBUG_TIMING", settings.DEBUG))
+
     def post(self, request):
+        timer = StepTimer("api_upload", enabled=self._timer_enabled())
+
+        def respond(payload, status=200, log=True):
+            """
+            Response helper: tự gắn _timing_ms vào JSON khi đang debug.
+            """
+            if timer.enabled:
+                payload.update(timer.as_dict())
+
+            if log:
+                timer.log()
+
+            return Response(payload, status=status)
+
         # ===== 1. IMAGE =====
         try:
             image = request.FILES.get("image")
+            timer.mark("01_get_image")
         except Exception as e:
-            return Response(
+            timer.mark("01_get_image_failed")
+            return respond(
                 {
                     "detail": "Upload interrupted",
                     "error": str(e),
@@ -35,33 +63,67 @@ class UploadAndDetectAPIView(APIView):
             )
 
         if not image:
-            return Response({"detail": "Missing image"}, status=400)
+            timer.mark("01_missing_image")
+            return respond(
+                {
+                    "detail": "Missing image",
+                },
+                status=400,
+            )
 
-        # ===== 2. DEVICE =====
+        # ===== 2. DEVICE TOKEN =====
         token = request.headers.get("X-DEVICE-TOKEN")
-        if not token:
-            return Response({"detail": "Missing X-DEVICE-TOKEN"}, status=401)
+        timer.mark("02_get_device_token")
 
+        if not token:
+            return respond(
+                {
+                    "detail": "Missing X-DEVICE-TOKEN",
+                },
+                status=401,
+            )
+
+        # ===== 3. QUERY DEVICE =====
         device = (
             Device.objects.filter(token=token, is_active=True)
             .select_related("vehicle")
             .first()
         )
+        timer.mark("03_query_device")
 
         if not device:
-            return Response({"detail": "Invalid device token"}, status=401)
+            return respond(
+                {
+                    "detail": "Invalid device token",
+                },
+                status=401,
+            )
 
-        device.last_seen = timezone.now()
-        device.save(update_fields=["last_seen"])
+        # ===== 4. SAVE LAST SEEN =====
+        try:
+            device.last_seen = timezone.now()
+            device.save(update_fields=["last_seen"])
+            timer.mark("04_save_last_seen")
+        except Exception as e:
+            timer.mark("04_save_last_seen_failed")
+            return respond(
+                {
+                    "detail": "Failed to update device last_seen",
+                    "error": str(e),
+                },
+                status=500,
+            )
 
-        # ===== 3. SAVE LIVE FRAME =====
+        # ===== 5. SAVE LIVE FRAME =====
         try:
             image.seek(0)
             save_latest_frame(device, image)
             image.seek(0)
+            timer.mark("05_save_latest_frame")
 
         except Exception as e:
-            return Response(
+            timer.mark("05_save_latest_frame_failed")
+            return respond(
                 {
                     "detail": "Failed to save latest frame",
                     "error": str(e),
@@ -69,30 +131,63 @@ class UploadAndDetectAPIView(APIView):
                 status=500,
             )
 
-        # ===== 3.1 BUFFER FRAME FOR VIDEO EVIDENCE =====
+        # ===== 6. BUFFER FRAME FOR VIDEO EVIDENCE =====
         try:
             image.seek(0)
             add_frame(device.token, image)
             image.seek(0)
+            timer.mark("06_add_frame_buffer")
 
-        except Exception:
+        except Exception as e:
             image.seek(0)
+            timer.mark("06_add_frame_buffer_failed")
+            # Không nên làm chết request chỉ vì buffer lỗi
+            # nhưng vẫn trả debug để biết có lỗi.
+            if getattr(settings, "API_STRICT_BUFFER_ERROR", False):
+                return respond(
+                    {
+                        "detail": "Failed to add frame to buffer",
+                        "error": str(e),
+                    },
+                    status=500,
+                )
 
-        # ===== 4. DRIVER =====
+        # ===== 7. DRIVER =====
         card_uid = (request.data.get("card_uid") or "").strip()
+        timer.mark("07_read_card_uid")
+
         if not card_uid:
-            return Response({"detail": "Missing card_uid"}, status=400)
+            return respond(
+                {
+                    "detail": "Missing card_uid",
+                },
+                status=400,
+            )
 
         reporter = Account.objects.filter(card_uid=card_uid).first()
+        timer.mark("08_query_driver")
+
         if not reporter:
-            return Response({"detail": "Driver not found"}, status=404)
+            return respond(
+                {
+                    "detail": "Driver not found",
+                },
+                status=404,
+            )
 
-        # ===== 5. VEHICLE =====
+        # ===== 8. VEHICLE =====
         vehicle = device.vehicle
-        if vehicle is None:
-            return Response({"detail": "Device has no vehicle"}, status=400)
+        timer.mark("09_get_vehicle")
 
-        # ===== 6. AI SERVER =====
+        if vehicle is None:
+            return respond(
+                {
+                    "detail": "Device has no vehicle",
+                },
+                status=400,
+            )
+
+        # ===== 9. AI SERVER =====
         try:
             image.seek(0)
             result = analyze_frame_with_ai_server(
@@ -101,9 +196,11 @@ class UploadAndDetectAPIView(APIView):
                 card_uid=card_uid,
             )
             image.seek(0)
+            timer.mark("10_call_ai_server")
 
         except AIServiceError as e:
-            return Response(
+            timer.mark("10_call_ai_server_failed")
+            return respond(
                 {
                     "detail": f"AI server error: {str(e)}",
                 },
@@ -111,14 +208,15 @@ class UploadAndDetectAPIView(APIView):
             )
 
         except Exception as e:
-            return Response(
+            timer.mark("10_call_ai_server_unexpected_failed")
+            return respond(
                 {
                     "detail": f"AI unexpected error: {str(e)}",
                 },
                 status=500,
             )
 
-        # ===== 6.1 SAVE LATEST AI RESULT FOR LIVE VIEW =====
+        # ===== 10. SAVE LATEST AI RESULT FOR LIVE VIEW =====
         try:
             update_fields = []
 
@@ -137,11 +235,21 @@ class UploadAndDetectAPIView(APIView):
             if update_fields:
                 device.save(update_fields=update_fields)
 
-        except Exception:
-            # Không làm chết request chỉ vì lỗi lưu trạng thái live
-            pass
+            timer.mark("11_save_latest_ai")
 
-        # ===== 7. READ RESULT =====
+        except Exception as e:
+            timer.mark("11_save_latest_ai_failed")
+            # Không làm chết request chỉ vì lỗi lưu trạng thái live
+            if getattr(settings, "API_STRICT_AI_STATE_ERROR", False):
+                return respond(
+                    {
+                        "detail": "Failed to save latest AI result",
+                        "error": str(e),
+                    },
+                    status=500,
+                )
+
+        # ===== 11. READ RESULT =====
         status_eye = result.get("status", "UNKNOWN")
         should_create_eye_violation = result.get("should_create_violation", False)
 
@@ -163,29 +271,36 @@ class UploadAndDetectAPIView(APIView):
         should_create_any_violation = (
             should_create_eye_violation or should_create_head_turn_violation
         )
+        timer.mark("12_parse_ai_result")
 
-        # ===== 8. NO VIOLATION =====
+        base_payload = {
+            "ok": True,
+            "eye_status": status_eye,
+            "eye_closed_streak": eye_closed_streak,
+            "ear": ear,
+            "baseline_ear": baseline_ear,
+            "is_calibrated": is_calibrated,
+            "head_yaw": head_yaw,
+            "head_direction": head_direction,
+            "head_turn_score": head_turn_score,
+            "head_status": head_status,
+            "vehicle": vehicle.license_plate,
+            "driver": reporter.username,
+        }
+
+        # ===== 12. NO VIOLATION =====
         if not should_create_any_violation:
-            return Response(
+            timer.mark("13_build_no_violation_response")
+
+            return respond(
                 {
-                    "ok": True,
-                    "eye_status": status_eye,
-                    "eye_closed_streak": eye_closed_streak,
-                    "ear": ear,
-                    "baseline_ear": baseline_ear,
-                    "is_calibrated": is_calibrated,
-                    "head_yaw": head_yaw,
-                    "head_direction": head_direction,
-                    "head_turn_score": head_turn_score,
-                    "head_status": head_status,
+                    **base_payload,
                     "violation": False,
-                    "vehicle": vehicle.license_plate,
-                    "driver": reporter.username,
                 },
                 status=200,
             )
 
-        # ===== 9. DECIDE TYPE =====
+        # ===== 13. DECIDE TYPE =====
         if should_create_eye_violation:
             category_name = getattr(settings, "DROWSINESS_CATEGORY_NAME", "Drowsiness")
             violation_title = "Drowsiness"
@@ -210,9 +325,23 @@ class UploadAndDetectAPIView(APIView):
             )
             violation_kind = "head"
 
-        category, _ = Category.objects.get_or_create(name=category_name)
+        timer.mark("14_decide_violation_type")
 
-        # ===== 10. COOLDOWN =====
+        # ===== 14. CATEGORY =====
+        try:
+            category, _ = Category.objects.get_or_create(name=category_name)
+            timer.mark("15_get_or_create_category")
+        except Exception as e:
+            timer.mark("15_get_or_create_category_failed")
+            return respond(
+                {
+                    "detail": "Failed to get or create category",
+                    "error": str(e),
+                },
+                status=500,
+            )
+
+        # ===== 15. COOLDOWN =====
         now = timezone.now()
         recent = Violation.objects.filter(
             reporter=reporter,
@@ -220,20 +349,14 @@ class UploadAndDetectAPIView(APIView):
             category=category,
             reported_at__gte=now - timedelta(seconds=cooldown),
         ).first()
+        timer.mark("16_check_cooldown")
 
         if recent:
-            return Response(
+            timer.mark("17_build_cooldown_response")
+
+            return respond(
                 {
-                    "ok": True,
-                    "eye_status": status_eye,
-                    "eye_closed_streak": eye_closed_streak,
-                    "ear": ear,
-                    "baseline_ear": baseline_ear,
-                    "is_calibrated": is_calibrated,
-                    "head_yaw": head_yaw,
-                    "head_direction": head_direction,
-                    "head_turn_score": head_turn_score,
-                    "head_status": head_status,
+                    **base_payload,
                     "violation": True,
                     "created": False,
                     "cooldown": True,
@@ -244,20 +367,23 @@ class UploadAndDetectAPIView(APIView):
                 status=200,
             )
 
-        # ===== 11. EXPORT VIDEO FROM DJANGO BUFFER =====
+        # ===== 16. EXPORT VIDEO FROM DJANGO BUFFER =====
         exported_video = None
 
         try:
             fps = int(getattr(settings, "DROWSINESS_FPS", 5))
             video_frames = get_frames(device.token)
+            timer.mark("17_get_video_frames")
 
             exported_video = export_frames_to_mp4_file(
                 frames=video_frames,
                 fps=fps,
             )
+            timer.mark("18_export_video")
 
         except Exception as e:
-            return Response(
+            timer.mark("18_export_video_failed")
+            return respond(
                 {
                     "detail": "Failed to export violation video",
                     "error": str(e),
@@ -265,7 +391,7 @@ class UploadAndDetectAPIView(APIView):
                 status=500,
             )
 
-        # ===== 12. CREATE VIOLATION =====
+        # ===== 17. CREATE VIOLATION =====
         violation = None
 
         try:
@@ -276,8 +402,9 @@ class UploadAndDetectAPIView(APIView):
                 title=violation_title,
                 description=violation_description,
             )
+            timer.mark("19_create_violation_db_row")
 
-            # Save image
+            # ===== 17.1 SAVE IMAGE =====
             try:
                 image.seek(0)
 
@@ -290,11 +417,13 @@ class UploadAndDetectAPIView(APIView):
                     image,
                     save=False,
                 )
+                timer.mark("20_save_violation_image")
 
             except Exception as e:
+                timer.mark("20_save_violation_image_failed")
                 raise RuntimeError(f"Failed to save violation image: {str(e)}")
 
-            # Save video
+            # ===== 17.2 SAVE VIDEO =====
             try:
                 if exported_video:
                     exported_video.file.seek(0)
@@ -304,16 +433,24 @@ class UploadAndDetectAPIView(APIView):
                         exported_video.file,
                         save=False,
                     )
+                    timer.mark("21_save_violation_video")
+                else:
+                    timer.mark("21_no_exported_video")
 
             except Exception as e:
+                timer.mark("21_save_violation_video_failed")
                 raise RuntimeError(f"Failed to save violation video: {str(e)}")
 
+            # ===== 17.3 FINAL SAVE =====
             violation.save()
+            timer.mark("22_final_violation_save")
 
             clear_frames(device.token)
+            timer.mark("23_clear_frame_buffer")
 
         except Exception as e:
-            return Response(
+            timer.mark("24_create_violation_failed")
+            return respond(
                 {
                     "detail": "Failed to create violation",
                     "error": str(e),
@@ -323,19 +460,14 @@ class UploadAndDetectAPIView(APIView):
 
         finally:
             cleanup_exported_video(exported_video)
+            timer.mark("25_cleanup_exported_video")
 
-        return Response(
+        # ===== 18. RESPONSE =====
+        timer.mark("26_build_violation_response")
+
+        return respond(
             {
-                "ok": True,
-                "eye_status": status_eye,
-                "eye_closed_streak": eye_closed_streak,
-                "ear": ear,
-                "baseline_ear": baseline_ear,
-                "is_calibrated": is_calibrated,
-                "head_yaw": head_yaw,
-                "head_direction": head_direction,
-                "head_turn_score": head_turn_score,
-                "head_status": head_status,
+                **base_payload,
                 "violation": True,
                 "created": True,
                 "violation_id": violation.id if violation else None,
