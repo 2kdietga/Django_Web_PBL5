@@ -13,7 +13,8 @@
   - trạng thái mắt, EAR, baseline EAR, số frame nhắm mắt liên tiếp;
   - hướng đầu, yaw, điểm quay đầu và trạng thái quay đầu.
 - Tự động tạo vi phạm khi AI báo tài xế buồn ngủ hoặc quay đầu quá lâu.
-- Lưu ảnh vi phạm và video bằng chứng ngắn từ buffer frame.
+- Tạo bản ghi vi phạm nhanh và đưa việc lưu ảnh/video bằng chứng sang background threadpool.
+- Lưu ảnh vi phạm và video bằng chứng ngắn từ buffer frame sau khi response API đã trả về.
 - Người dùng xem danh sách vi phạm của chính mình, lọc theo ngày và loại vi phạm.
 - Người dùng xem chi tiết vi phạm và gửi đơn kháng cáo.
 - Admin/staff xem danh sách kháng cáo, duyệt hoặc từ chối kháng cáo.
@@ -30,6 +31,7 @@
 - Cloudinary và `django-cloudinary-storage`
 - OpenCV, NumPy, ffmpeg cho xử lý frame/video bằng chứng
 - httpx để gọi FastAPI AI server
+- `ThreadPoolExecutor` để xử lý ảnh/video bằng chứng vi phạm ở background
 - WhiteNoise để phục vụ static file
 - Gunicorn cho production
 - Docker
@@ -40,7 +42,7 @@
 Django_Web/
 ├── Django_Web/          # Cấu hình project: settings, urls, wsgi, asgi
 ├── accounts/            # Tài khoản, đăng nhập, đăng ký, hồ sơ, ảnh người dùng
-├── api/                 # API nhận frame, gọi AI server, buffer frame, xuất video
+├── api/                 # API nhận frame, gọi AI server, buffer frame, background jobs, xuất video
 ├── categories/          # Danh mục/loại vi phạm
 ├── devices/             # Thiết bị giám sát, live frame, live view
 ├── vehicles/            # Phương tiện
@@ -187,7 +189,10 @@ Luồng xử lý:
 9. Gửi ảnh sang FastAPI AI server tại `${AI_SERVER_URL}/v1/analyze/`.
 10. Lưu kết quả AI mới nhất vào `Device`.
 11. Nếu không có vi phạm, trả JSON trạng thái.
-12. Nếu có vi phạm, xác định loại vi phạm, kiểm tra cooldown, xuất video từ buffer, tạo `Violation`, lưu ảnh/video và trả JSON kết quả.
+12. Nếu có vi phạm, xác định loại vi phạm và kiểm tra cooldown.
+13. Snapshot frame buffer, lưu ảnh hiện tại vào file tạm và tạo nhanh bản ghi `Violation`.
+14. Đưa job xử lý bằng chứng vào background threadpool.
+15. Trả response `202 Accepted` ngay với `queued=true`; ảnh/video sẽ được gắn vào `Violation` sau khi worker chạy xong.
 
 Ví dụ request bằng `curl`:
 
@@ -218,20 +223,24 @@ Ví dụ response khi không có vi phạm:
 }
 ```
 
-Ví dụ response khi tạo vi phạm:
+Ví dụ response khi tạo vi phạm và đã đưa job bằng chứng vào hàng đợi:
 
 ```json
 {
   "ok": true,
   "violation": true,
   "created": true,
+  "queued": true,
+  "evidence_ready": false,
   "violation_id": 1,
   "violation_kind": "eye",
-  "has_video": true,
-  "image_url": "https://...",
-  "video_url": "https://..."
+  "has_video": false,
+  "image_url": null,
+  "video_url": null
 }
 ```
+
+Response này dùng HTTP status `202`. Trang chi tiết vi phạm sẽ có ảnh/video sau khi background worker lưu xong bằng chứng.
 
 ## Luồng nghiệp vụ tổng quát
 
@@ -247,10 +256,36 @@ FastAPI AI Server
 Django_Web
     ↓ lưu latest_ai_json
     ↓ tạo Violation nếu vượt ngưỡng
-    ↓ lưu ảnh/video bằng chứng
+    ↓ enqueue job xử lý ảnh/video bằng chứng
+Background ThreadPool
+    ↓ lưu ảnh bằng chứng
+    ↓ xuất video MP4 từ buffer frame
+    ↓ gắn image/video vào Violation
 Người dùng/Admin
     ↓ xem vi phạm, kháng cáo, duyệt kháng cáo
 ```
+
+## Background threadpool xử lý bằng chứng
+
+Dự án dùng `api.background_jobs` để tách phần xử lý nặng ra khỏi request `/api/upload/`.
+
+Khi AI báo có vi phạm và không bị cooldown, Django chỉ tạo bản ghi `Violation` trước, sau đó enqueue job bằng `ThreadPoolExecutor`. Job background sẽ:
+
+1. Mở lại bản ghi `Violation` theo `violation_id`.
+2. Lưu ảnh bằng chứng từ file tạm trong `MEDIA_ROOT/tmp/violation_images/`.
+3. Xuất video MP4 từ snapshot frame buffer bằng OpenCV, nếu có `ffmpeg` thì convert sang H.264/yuv420p để trình duyệt dễ phát.
+4. Lưu `image` và `video` qua Django storage hiện tại, tức là Cloudinary nếu đã cấu hình.
+5. Xóa buffer frame của thiết bị sau khi bằng chứng đã lưu xong.
+6. Dọn file ảnh tạm và thư mục video tạm.
+7. Gọi `close_old_connections()` để tránh giữ connection database cũ trong thread.
+
+Các điểm cần lưu ý:
+
+- Không truyền trực tiếp `request.FILES` hoặc object request vào thread vì sau khi request kết thúc file có thể bị đóng.
+- View chỉ truyền `violation_id`, `device_token`, đường dẫn ảnh tạm và list frame đã snapshot.
+- Nếu worker lỗi, request tạo vi phạm vẫn đã trả về thành công; lỗi được ghi log qua logger của `api.background_jobs`.
+- Vì threadpool chạy trong memory của process Django/Gunicorn, job có thể mất nếu process bị restart trước khi xử lý xong. Với production cần độ bền cao hơn, có thể thay bằng Celery/RQ và message broker.
+- Với nhiều Gunicorn worker, mỗi process có threadpool và frame buffer riêng; thiết bị nên gửi liên tục vào cùng instance nếu cần video buffer ổn định.
 
 ## Cài đặt môi trường local
 
@@ -298,6 +333,14 @@ CLOUDINARY_CLOUD_NAME=your-cloud-name
 CLOUDINARY_API_KEY=your-api-key
 CLOUDINARY_API_SECRET=your-api-secret
 ```
+
+Số thread background xử lý bằng chứng hiện được cấu hình trong `Django_Web/settings.py`:
+
+```python
+VIOLATION_WORKER_THREADS = 1
+```
+
+Tăng giá trị này nếu server cần xử lý nhiều vi phạm đồng thời. Cần cân nhắc CPU/RAM vì mỗi job có thể giữ nhiều frame OpenCV và chạy export video.
 
 Nếu không dùng `DATABASE_URL`, có thể cấu hình các biến database riêng theo code trong `settings.py`:
 
@@ -387,6 +430,8 @@ Một số setting AI/cooldown có giá trị fallback trong code nếu chưa kh
 | `DROWSINESS_BUFFER_SECONDS` | `5` | Số giây frame giữ trong buffer |
 | `DROWSINESS_EYE_CLOSED_FRAMES` | `6` | Ngưỡng hiển thị frame nhắm mắt trong live view |
 | `DROWSINESS_HEAD_TURN_VIOLATION_FRAMES` | `15` | Ngưỡng hiển thị quay đầu trong live view |
+| `VIOLATION_WORKER_THREADS` | `1` | Số thread background xử lý ảnh/video bằng chứng vi phạm |
+| `API_DEBUG_TIMING` | `False` | Bật log `_timing_ms` cho từng bước trong API upload |
 
 ## API AI server cần tương thích
 
@@ -446,7 +491,8 @@ Response AI server nên trả các field mà Django đang đọc:
   - WhiteNoise được dùng trong middleware để phục vụ static file production.
 - Media bằng chứng:
   - default storage đang dùng `MediaCloudinaryStorage`;
-  - ảnh/video vi phạm lưu lên Cloudinary nếu cấu hình Cloudinary đầy đủ;
+  - ảnh/video vi phạm được background worker lưu lên Cloudinary nếu cấu hình Cloudinary đầy đủ;
+  - ngay sau khi API trả `202`, bản ghi vi phạm có thể chưa có ảnh/video cho đến khi worker hoàn tất;
   - các file này dùng cho trang chi tiết vi phạm và kháng cáo.
 - Live frame:
   - không dùng `MediaCloudinaryStorage` và không upload Cloudinary;
@@ -485,7 +531,8 @@ Dự án đã chuẩn bị cho môi trường production như Render hoặc dị
 - Port mặc định trong Docker là `10000`.
 - Database ưu tiên đọc từ `DATABASE_URL`.
 - Static file được phục vụ qua WhiteNoise.
-- Ảnh/video vi phạm có thể lưu trên Cloudinary; live frame vẫn lưu local trong `MEDIA_ROOT/live_frames/`.
+- Ảnh/video vi phạm được xử lý bằng background threadpool và có thể lưu trên Cloudinary; live frame vẫn lưu local trong `MEDIA_ROOT/live_frames/`.
+- Nếu chạy nhiều Gunicorn worker, mỗi worker có threadpool và memory buffer riêng. Cấu hình worker/process cần phù hợp với luồng frame thực tế.
 
 Các biến môi trường production tối thiểu:
 
