@@ -13,9 +13,10 @@ from devices.services import save_latest_frame
 from violations.models import Violation
 
 from .ai_client import AIServiceError, analyze_frame_with_ai_server
-from .frame_buffer import add_frame, clear_frames, get_frames
 from .timing import StepTimer
-from .video_utils import cleanup_exported_video, export_frames_to_mp4_file
+from .frame_buffer import add_frame, get_frames
+from .background_jobs import enqueue_violation_evidence_job
+from .temp_files import save_uploaded_file_to_temp
 
 
 class UploadAndDetectAPIView(APIView):
@@ -366,34 +367,31 @@ class UploadAndDetectAPIView(APIView):
                 },
                 status=200,
             )
-
-        # ===== 16. EXPORT VIDEO FROM DJANGO BUFFER =====
-        exported_video = None
-
+        # ===== 16. SNAPSHOT EVIDENCE DATA FOR BACKGROUND JOB =====
         try:
             fps = int(getattr(settings, "DROWSINESS_FPS", 5))
-            video_frames = get_frames(device.token)
-            timer.mark("17_get_video_frames")
 
-            exported_video = export_frames_to_mp4_file(
-                frames=video_frames,
-                fps=fps,
-            )
-            timer.mark("18_export_video")
+            # Snapshot frame hiện tại để worker xử lý.
+            # Dùng list(...) để tránh worker đọc buffer bị thay đổi bởi request sau.
+            video_frames = list(get_frames(device.token))
+            timer.mark("17_snapshot_video_frames")
+
+            image.seek(0)
+            evidence_image_path, evidence_image_name = save_uploaded_file_to_temp(image)
+            image.seek(0)
+            timer.mark("18_save_temp_evidence_image")
 
         except Exception as e:
-            timer.mark("18_export_video_failed")
+            timer.mark("18_prepare_evidence_failed")
             return respond(
                 {
-                    "detail": "Failed to export violation video",
+                    "detail": "Failed to prepare violation evidence",
                     "error": str(e),
                 },
                 status=500,
             )
 
-        # ===== 17. CREATE VIOLATION =====
-        violation = None
-
+        # ===== 17. CREATE VIOLATION ROW QUICKLY =====
         try:
             violation = Violation.objects.create(
                 category=category,
@@ -404,77 +402,54 @@ class UploadAndDetectAPIView(APIView):
             )
             timer.mark("19_create_violation_db_row")
 
-            # ===== 17.1 SAVE IMAGE =====
-            try:
-                image.seek(0)
-
-                image_name = image.name or "violation.jpg"
-                if "." not in image_name:
-                    image_name = f"{image_name}.jpg"
-
-                violation.image.save(
-                    image_name,
-                    image,
-                    save=False,
-                )
-                timer.mark("20_save_violation_image")
-
-            except Exception as e:
-                timer.mark("20_save_violation_image_failed")
-                raise RuntimeError(f"Failed to save violation image: {str(e)}")
-
-            # ===== 17.2 SAVE VIDEO =====
-            try:
-                if exported_video:
-                    exported_video.file.seek(0)
-
-                    violation.video.save(
-                        exported_video.filename,
-                        exported_video.file,
-                        save=False,
-                    )
-                    timer.mark("21_save_violation_video")
-                else:
-                    timer.mark("21_no_exported_video")
-
-            except Exception as e:
-                timer.mark("21_save_violation_video_failed")
-                raise RuntimeError(f"Failed to save violation video: {str(e)}")
-
-            # ===== 17.3 FINAL SAVE =====
-            violation.save()
-            timer.mark("22_final_violation_save")
-
-            clear_frames(device.token)
-            timer.mark("23_clear_frame_buffer")
-
         except Exception as e:
-            timer.mark("24_create_violation_failed")
+            timer.mark("19_create_violation_db_row_failed")
             return respond(
                 {
-                    "detail": "Failed to create violation",
+                    "detail": "Failed to create violation row",
                     "error": str(e),
                 },
                 status=500,
             )
 
-        finally:
-            cleanup_exported_video(exported_video)
-            timer.mark("25_cleanup_exported_video")
+        # ===== 18. ENQUEUE BACKGROUND EVIDENCE JOB =====
+        try:
+            enqueue_violation_evidence_job(
+                violation_id=violation.id,
+                device_token=device.token,
+                evidence_image_path=evidence_image_path,
+                evidence_image_name=evidence_image_name,
+                video_frames=video_frames,
+                fps=fps,
+            )
+            timer.mark("20_enqueue_violation_evidence_job")
 
-        # ===== 18. RESPONSE =====
-        timer.mark("26_build_violation_response")
+        except Exception as e:
+            timer.mark("20_enqueue_violation_evidence_job_failed")
+            return respond(
+                {
+                    "detail": "Failed to enqueue violation evidence job",
+                    "error": str(e),
+                    "violation_id": violation.id,
+                },
+                status=500,
+            )
+
+        # ===== 19. RESPONSE IMMEDIATELY =====
+        timer.mark("21_build_violation_queued_response")
 
         return respond(
             {
                 **base_payload,
                 "violation": True,
                 "created": True,
-                "violation_id": violation.id if violation else None,
+                "queued": True,
+                "evidence_ready": False,
+                "violation_id": violation.id,
                 "violation_kind": violation_kind,
-                "has_video": bool(exported_video),
-                "image_url": violation.image.url if violation and violation.image else None,
-                "video_url": violation.video.url if violation and violation.video else None,
+                "has_video": False,
+                "image_url": None,
+                "video_url": None,
             },
-            status=201,
+            status=202,
         )
