@@ -70,7 +70,9 @@
         <h3>Latest Frame</h3>
         <img
           id="liveFrame"
-          src="/devices/{{ device.id }}/frame/"
+          {% if device.latest_frame_path %}
+          src="{% url 'device_latest_frame' device.id %}?t={{ device.latest_frame_at|date:'U' }}"
+          {% endif %}
           alt="Latest frame"
         />
         <p>Latest frame at: <span id="latestFrameAt">-</span></p>

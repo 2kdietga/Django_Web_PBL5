@@ -3,78 +3,83 @@ import os
 
 from django.conf import settings
 from django.http import FileResponse, Http404, JsonResponse
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
+from django.views.decorators.cache import never_cache
 
 from .models import Device
 
 
-def _local_media_path_from_field(file_field):
+def _local_media_path_from_relative_path(relative_path):
     """
-    Lấy path local từ file_field.name.
+    Chuyển Device.latest_frame_path thành absolute path trong MEDIA_ROOT.
 
-    Không dùng file_field.path trước, vì nếu default storage là Cloudinary
-    thì .path có thể lỗi hoặc không tồn tại.
+    latest_frame_path nên là dạng:
+    live_frames/device_1/xxx.jpg
+
+    Không dùng storage Cloudinary cho live frame.
     """
-    if not file_field:
+    if not relative_path:
         return None
 
-    name = getattr(file_field, "name", None)
-    if not name:
-        return None
+    safe_relative_path = str(relative_path).replace("\\", "/").lstrip("/")
 
-    # Chống path traversal
-    safe_name = name.replace("\\", "/").lstrip("/")
-    abs_path = os.path.abspath(os.path.join(settings.MEDIA_ROOT, safe_name))
     media_root = os.path.abspath(settings.MEDIA_ROOT)
+    abs_path = os.path.abspath(os.path.join(media_root, safe_relative_path))
 
-    if not abs_path.startswith(media_root):
+    # Chống path traversal: ../../...
+    try:
+        common_path = os.path.commonpath([media_root, abs_path])
+    except ValueError:
+        return None
+
+    if common_path != media_root:
         return None
 
     return abs_path
 
 
+@never_cache
 def device_latest_frame(request, id):
     """
-    Trả frame mới nhất của device.
+    Trả frame mới nhất của device từ local MEDIA_ROOT.
 
-    Ưu tiên:
-    1. Local file trong MEDIA_ROOT/live_frames/...
-    2. Fallback sang storage URL nếu là file cũ trên Cloudinary
+    Field đúng hiện tại:
+    - device.latest_frame_path
+    - device.latest_frame_at
     """
     device = get_object_or_404(Device, id=id)
 
-    if not device.latest_frame:
+    latest_frame_path = getattr(device, "latest_frame_path", None)
+
+    if not latest_frame_path:
         raise Http404("No frame available")
 
-    # Ưu tiên đọc local bằng latest_frame.name
-    frame_path = _local_media_path_from_field(device.latest_frame)
+    frame_path = _local_media_path_from_relative_path(latest_frame_path)
 
-    if frame_path and os.path.exists(frame_path):
-        content_type, _encoding = mimetypes.guess_type(frame_path)
-        content_type = content_type or "image/jpeg"
+    if not frame_path:
+        raise Http404("Invalid frame path")
 
-        response = FileResponse(
-            open(frame_path, "rb"),
-            content_type=content_type,
-        )
+    if not os.path.exists(frame_path):
+        raise Http404("Frame file not found")
 
-        response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response["Pragma"] = "no-cache"
-        response["Expires"] = "0"
+    if not os.path.isfile(frame_path):
+        raise Http404("Frame path is not a file")
 
-        return response
+    content_type, _encoding = mimetypes.guess_type(frame_path)
+    content_type = content_type or "image/jpeg"
 
-    # Fallback cho dữ liệu cũ nếu trước đó latest_frame đã nằm trên Cloudinary
-    try:
-        frame_url = device.latest_frame.url
-    except Exception:
-        frame_url = None
+    response = FileResponse(
+        open(frame_path, "rb"),
+        content_type=content_type,
+    )
 
-    if frame_url:
-        return redirect(frame_url)
+    # Tránh browser cache ảnh cũ
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    response["Expires"] = "0"
 
-    raise Http404("Frame file not found")
+    return response
 
 
 def device_live_view(request, id):
@@ -116,7 +121,7 @@ def device_live_view(request, id):
 
         latest_frame_url = None
 
-        if device.latest_frame:
+        if getattr(device, "latest_frame_path", None):
             latest_frame_url = (
                 f"/devices/{device.id}/frame/"
                 f"?t={int(timezone.now().timestamp() * 1000)}"
