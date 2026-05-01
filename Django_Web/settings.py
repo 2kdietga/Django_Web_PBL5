@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 # Bật tắt debug timing cho API, sẽ log thời gian của từng bước nếu bật
-API_DEBUG_TIMING = True
+API_DEBUG_TIMING = False
 # Số lượng thread worker để xử lý job vi phạm trong background. Mỗi job sẽ xử lý 1 request vi phạm, bao gồm lưu ảnh, export video, gọi AI service.
 VIOLATION_WORKER_THREADS = 1
 
