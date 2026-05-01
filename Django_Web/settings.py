@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 # Bật tắt debug timing cho API, sẽ log thời gian của từng bước nếu bật
-API_DEBUG_TIMING = True
+API_DEBUG_TIMING = False
 # Số lượng thread worker để xử lý job vi phạm trong background. Mỗi job sẽ xử lý 1 request vi phạm, bao gồm lưu ảnh, export video, gọi AI service.
 VIOLATION_WORKER_THREADS = 1
 
@@ -118,6 +118,9 @@ LOGOUT_REDIRECT_URL = 'login'
 #     }
 # }
 
+
+DROWSINESS_VIOLATION_COOLDOWN_SECONDS = 60  # Thời gian cooldown giữa các lần ghi nhận vi phạm buồn ngủ của cùng một tài xế (tính bằng giây)
+HEAD_TURN_VIOLATION_COOLDOWN_SECONDS = 45  # Thời gian cooldown giữa các lần ghi nhận vi phạm quay đầu của cùng một tài xế (tính bằng giây)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://dautay90:lK2V99OWdpmB2WiKIdx4jXYzp91ap8eY@dpg-d7nib3u8bjmc738s2on0-a.singapore-postgres.render.com/dbpbl5")
 
